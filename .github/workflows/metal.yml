@@ -123,6 +123,11 @@ jobs:
             INSERT="    pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k \"all\" --didt-workload-iterations 100 --determinism-check-interval 0"
             sed -i "/$SEARCH/a$INSERT" dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
           fi
+          if [ "${{ matrix.config.board }}" == "bh-galaxy-revc" ]; then
+            # The galaxy has Z port cables, which the deploy ethernet tests require.
+            sed -i 's/bh_galaxy_xy_torus\.textproto/bh_galaxy_xy_torus_z_ports.textproto/g' \
+              dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+          fi
 
           # Patch tests to remove determinism checks, which are only reliable
           # on metal CI fleets
