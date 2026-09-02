@@ -92,6 +92,19 @@ static void WriteNocCfgReg(volatile void *regs, uint32_t cfg_reg_index, uint32_t
 	WriteReg(address, value);
 }
 
+/* Guards NOC_ECC_TLB. Lives here rather than noc_ecc.c so the recovery image links. */
+static K_MUTEX_DEFINE(noc_ecc_tlb_lock);
+
+void NocEccTlbLock(void)
+{
+	k_mutex_lock(&noc_ecc_tlb_lock, K_FOREVER);
+}
+
+void NocEccTlbUnlock(void)
+{
+	k_mutex_unlock(&noc_ecc_tlb_lock);
+}
+
 static void EnableOverlayCg(uint8_t tlb_index, uint8_t px, uint8_t py)
 {
 	uint8_t ring = 0; /* Either NOC ring works, there's only one overlay. */

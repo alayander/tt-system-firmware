@@ -20,7 +20,9 @@
 #include "smbus_target.h"
 #include "gddr.h"
 #include "asic_state.h"
+#include "noc.h"
 #include "noc_init.h"
+#include "noc_ecc.h"
 
 LOG_MODULE_REGISTER(tt_shell, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -293,12 +295,138 @@ static int counter_clear_handler(const struct shell *sh, size_t argc, char **arg
 }
 #endif
 
+/*
+ * Optional trailing "<noc_x> <noc_y>" pair, starting at argv[first].
+ * Supplying neither picks an arbitrary enabled tile; supplying one is a typo, not a default.
+ */
+static int parse_noc_coord_args(const struct shell *sh, size_t argc, char **argv, size_t first,
+				uint8_t *noc_x, uint8_t *noc_y)
+{
+	uint32_t parsed_x, parsed_y;
+
+	if (argc == first) {
+		GetEnabledTensix(noc_x, noc_y);
+		return 0;
+	}
+
+	if (argc != first + 2) {
+		shell_error(sh, "Provide both noc_x and noc_y, or neither");
+		return -EINVAL;
+	}
+
+	if (parse_u32_arg(argv[first], &parsed_x) != 0 ||
+	    parse_u32_arg(argv[first + 1], &parsed_y) != 0) {
+		shell_error(sh, "Invalid NOC coordinate");
+		return -EINVAL;
+	}
+	if (parsed_x >= NOC_X_SIZE || parsed_y >= NOC_Y_SIZE) {
+		shell_error(sh, "NOC coordinate out of range (x < %u, y < %u)", NOC_X_SIZE,
+			    NOC_Y_SIZE);
+		return -EINVAL;
+	}
+	/* A NOC read to a node with no reachable NIU (SERDES, column 8) can hang ARC. */
+	if (!NocEccIsKnownNode(parsed_x, parsed_y)) {
+		shell_error(sh, "(%u, %u) is not a Tensix/ETH/GDDR/PCIE/ARC node", parsed_x,
+			    parsed_y);
+		return -EINVAL;
+	}
+
+	*noc_x = parsed_x;
+	*noc_y = parsed_y;
+	return 0;
+}
+
+static void ecc_print_counters(const struct shell *sh, const char *label,
+			       const uint32_t counters[NOC_ECC_NUM_SOURCES])
+{
+	shell_print(sh, "%-7s mem_parity=%u hdr_sbe=%u hdr_dbe=%u", label,
+		    counters[NOC_ECC_MEM_PARITY], counters[NOC_ECC_HDR_SBE],
+		    counters[NOC_ECC_HDR_DBE]);
+}
+
+static int parse_ecc_mask_arg(const struct shell *sh, const char *arg, uint32_t *which)
+{
+	if (parse_u32_arg(arg, which) != 0 || *which == 0 || (*which & ~NOC_ECC_SOURCE_MASK) != 0) {
+		shell_error(sh, "Mask must be 1..%u (bit0 mem_parity, bit1 hdr_sbe, bit2 hdr_dbe)",
+			    (unsigned int)NOC_ECC_SOURCE_MASK);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int ecc_force_handler(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t before[NOC_ECC_NUM_SOURCES];
+	uint32_t after[NOC_ECC_NUM_SOURCES];
+	uint8_t noc_x, noc_y;
+	uint32_t which = BIT(NOC_ECC_MEM_PARITY);
+	size_t coord_argc = argc;
+	int ret;
+
+	/* Optional mask is last so a pair is always coordinates: [x y] [mask]. */
+	if (argc == 2 || argc == 4) {
+		ret = parse_ecc_mask_arg(sh, argv[argc - 1], &which);
+		if (ret != 0) {
+			return ret;
+		}
+		coord_argc = argc - 1;
+	}
+
+	ret = parse_noc_coord_args(sh, coord_argc, argv, 1, &noc_x, &noc_y);
+	if (ret != 0) {
+		return ret;
+	}
+
+	/*
+	 * All three registers live in the NIU, so no clock gate check. The counters are the only
+	 * evidence the force landed: NIU ECC_CTRL is write-only.
+	 */
+	NocEccReadCounters(noc_x, noc_y, before);
+	NocEccForce(noc_x, noc_y, which);
+	NocEccReadCounters(noc_x, noc_y, after);
+
+	shell_print(sh, "tile: noc0 (%u, %u)   forced mask 0x%X", noc_x, noc_y, which);
+	ecc_print_counters(sh, "before:", before);
+	ecc_print_counters(sh, "after:", after);
+
+	for (int i = 0; i < NOC_ECC_NUM_SOURCES; i++) {
+		if ((which & BIT(i)) != 0 && after[i] == before[i]) {
+			shell_warn(sh, "Counter %d did not move; the force did not reach the NIU",
+				   i);
+		}
+	}
+
+	return 0;
+}
+
+static int ecc_clear_handler(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t counters[NOC_ECC_NUM_SOURCES];
+	uint8_t noc_x, noc_y;
+	int ret;
+
+	ret = parse_noc_coord_args(sh, argc, argv, 1, &noc_x, &noc_y);
+	if (ret != 0) {
+		return ret;
+	}
+
+	NocEccClear(noc_x, noc_y, NOC_ECC_SOURCE_MASK);
+	NocEccReadCounters(noc_x, noc_y, counters);
+
+	shell_print(sh, "tile: noc0 (%u, %u)   cleared", noc_x, noc_y);
+	ecc_print_counters(sh, "now:", counters);
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	sub_tt_commands, SHELL_CMD_ARG(mrisc_power, NULL, "[off|on]", mrisc_power_handler, 2, 0),
 	SHELL_CMD_ARG(tensix_power, NULL, "[off|on]", tensix_enable_handler, 2, 0),
 	SHELL_CMD_ARG(l2cpu_power, NULL, "[off|on]", l2cpu_enable_handler, 2, 0),
 	SHELL_CMD_ARG(asic_state, NULL, "[|0|3]", asic_state_handler, 1, 1),
 	SHELL_CMD_ARG(telem, NULL, "<Telemetry Index> [|x|f|d]", telem_handler, 2, 1),
+	SHELL_CMD_ARG(ecc_force, NULL, "[<noc_x> <noc_y>] [<mask>]", ecc_force_handler, 1, 3),
+	SHELL_CMD_ARG(ecc_clear, NULL, "[<noc_x> <noc_y>]", ecc_clear_handler, 1, 2),
 #ifdef CONFIG_TT_MSGQUEUE
 	SHELL_CMD_ARG(msg, NULL, "<cmd> [data1 ... data7]", msg_handler, 2, 7),
 	SHELL_CMD_ARG(counter, NULL, "<bank> <index>", counter_get_handler, 3, 0),

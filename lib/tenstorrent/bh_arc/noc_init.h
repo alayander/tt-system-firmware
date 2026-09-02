@@ -10,6 +10,25 @@
 
 #define NO_BAD_GDDR UINT8_MAX
 
+/** @brief NOC2AXI TLB index reserved for ECC accesses, on both NOC rings.
+ *
+ * Every user takes @ref NocEccTlbLock. ECC counter and ECC_STATUS reads go over
+ * @ref NOC_ECC_RING; chip-wide ROUTER_CFG_0 walks use this index on each ring in turn.
+ */
+#define NOC_ECC_TLB  15
+#define NOC_ECC_RING 0
+
+/** @brief Guards @ref NOC_ECC_TLB.
+ *
+ * Shared by every ECC NOC access: telemetry, the shell ECC commands, and the
+ * ROUTER_CFG_0 walks in noc_init. Those deliberately avoid TLB 0, which the rest
+ * of noc_init and reset.c program with no lock. Defined here rather than in
+ * noc_ecc.c so the recovery library can use it. Innermost lock: never take the
+ * ECC state lock while holding this one.
+ */
+void NocEccTlbLock(void);
+void NocEccTlbUnlock(void);
+
 int32_t set_tensix_enable(bool enable);
 
 int NocInit(void);
