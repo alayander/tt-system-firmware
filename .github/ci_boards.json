@@ -57,6 +57,7 @@
       "metal-target": "blackhole_glx",
       "arch-name": "blackhole",
       "metal-options": "--cap-add SYS_MODULE --device /dev/tenstorrent --device /dev/ipmi0 --user=root",
+      "metal-deploy-run-eth": true,
       "kmd_build": "2.11.0"
     }
   ]
