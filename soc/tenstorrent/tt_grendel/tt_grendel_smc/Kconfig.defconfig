@@ -28,4 +28,13 @@ config 2ND_LVL_INTR_00_OFFSET
 config RISCV_PMP
 	default y
 
+config PMP_GRANULARITY
+	default 4096
+
+config PMP_POWER_OF_TWO_ALIGNMENT
+	default n
+
+config PMP_NO_TOR
+	default n
+
 endif # TT_GRENDEL_SMC
