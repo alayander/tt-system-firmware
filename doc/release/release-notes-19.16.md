@@ -19,6 +19,13 @@ Major enhancements with this release include:
 
 - Added GDDR CA latch-and-retest functionality (SYS-5042) to improve GDDR initialization reliability on Blackhole.
 
+### Ethernet
+
+- Manual EQ now recovers when the link partner loses signal mid-training
+  (e.g. partner reset) instead of failing; removed the 2 s post-sigdet.
+- Fixed retrain and train_status bugs (successful retrain treated as a
+  failure, loopback statuses overwritten).
+
 ### PCIe
 
 - Request per-rate PCIe EQ presets from the firmware table.
