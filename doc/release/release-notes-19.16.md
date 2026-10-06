@@ -33,11 +33,6 @@ Major enhancements with this release include:
 
 ## Boot & Firmware
 
-### Boot Filesystem
-
-- Enhanced static firmware table layout with multi-table organization for improved robustness.
-- Moved mutable firmware records to separate table to reduce risk of corruption during updates.
-
 ### MCUBoot
 
 - Derived MCUBoot RAM load window from device tree configuration for improved flexibility.
