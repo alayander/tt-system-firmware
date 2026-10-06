@@ -84,7 +84,6 @@ Original Micron MT25 boards are exempt from the JEDEC-ID requirement, so existin
 - Msgqueue gains a mailbox IRQ doorbell backend, used by MMK.
 - Register-name shim for Keraunos.
 
-
 ## Migration guide
 
 An overview of required and recommended changes to make when migrating from the previous v19.14.0 release can be found in [19.15 Migration Guide](https://github.com/tenstorrent/tt-system-firmware/tree/main/doc/release/migration-guide-19.15.md).
