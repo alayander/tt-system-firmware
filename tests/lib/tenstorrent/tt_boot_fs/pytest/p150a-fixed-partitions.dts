@@ -100,8 +100,7 @@
 			label = "flshinfo";
 			source = "$AUTO";
 			reg = <0x52000 0x1000>;
-			binary-path =
-				"$BUILD_DIR/smc/generated_board_cfg/$BOARD_REV/flash_info.bin";
+			binary-path = "$BUILD_DIR/smc/generated_board_cfg/$BOARD_REV/flash_info.bin";
 			read-only;
 		};
 
