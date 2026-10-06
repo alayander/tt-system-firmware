@@ -83,18 +83,13 @@ mapping:
     include: alignment-schema
     required: true
 
-  # Bootfs tables
-  tables:
+  # The list of image objects
+  images:
     type: seq
-    required: true
     sequence:
-      - type: map
-        mapping:
-          # Header address of the table
-          header_addr:
-            type: int
-            required: true
-          images:
-            type: seq
-            sequence:
-              - include: image-schema
+      - include: image-schema
+
+  # Fail over image
+  fail_over_image:
+    include: image-schema
+    required: true
