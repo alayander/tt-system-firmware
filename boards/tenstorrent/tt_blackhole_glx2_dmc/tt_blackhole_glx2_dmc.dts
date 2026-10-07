@@ -113,6 +113,10 @@
 };
 
 &clk_lse {
+	status = "disabled";
+};
+
+&clk_lsi {
 	status = "okay";
 };
 
@@ -122,7 +126,6 @@
 
 &clk_msis {
 	status = "okay";
-	msi-pll-mode;
 	msi-range = <0>; /* 96MHz (reset value) */
 };
 
