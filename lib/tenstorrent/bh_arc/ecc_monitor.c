@@ -36,6 +36,7 @@
 #include "noc_ecc.h"
 #include "noc_init.h"
 #include "reg.h"
+#include "telemetry.h"
 #include "tensix_ecc.h"
 #include "tensix_state_msg.h"
 
@@ -352,10 +353,13 @@ static void TensixStateCallback(const struct zbus_channel *chan)
 ZBUS_LISTENER_DEFINE(ecc_monitor_tensix_state_listener, TensixStateCallback);
 ZBUS_CHAN_ADD_OBS(tensix_state_chan, ecc_monitor_tensix_state_listener, 0);
 
-/* After NocInit/TensixInit have enabled NOC ECC and armed the tiles. */
 static int ecc_monitor_init(void)
 {
 	if (IS_ENABLED(CONFIG_TT_SMC_RECOVERY) || !IS_ENABLED(CONFIG_ARC)) {
+		return 0;
+	}
+
+	if (!GetActiveFeatures().ecc) {
 		return 0;
 	}
 

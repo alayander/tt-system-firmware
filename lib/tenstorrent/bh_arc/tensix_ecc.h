@@ -109,6 +109,7 @@ struct tensix_ecc_tile {
  * the dummy UNPACR that absorbs the post-reset first-instruction corruption. L1 must
  * already hold valid ECC: scrubbing uninitialised L1 would saturate the sticky SBE/DBE
  * counters. Uses the unlocked TLB 0 via tensix_inject_instruction, like the UNPACR.
+ * No-op when feature_enable.ecc_en is clear.
  *
  * @param broadcast true to hit every non-harvested Tensix via the multicast TLB.
  * @param noc_x     X coordinate when @p broadcast is false, in the active coordinate system.
@@ -123,7 +124,7 @@ void TensixEccEnableScrubber(bool broadcast, uint8_t noc_x, uint8_t noc_y);
  * on its select writes). Tile reset zeroes ECC_CTRL, so call this wherever the tile is
  * reinitialised. The write is dropped by a clock-gated tile; the Tensix power-on path arms
  * again. Takes the ECC TLB lock so a concurrent service cannot have its view select
- * overwritten mid-read.
+ * overwritten mid-read. No-op when feature_enable.ecc_en is clear.
  *
  * @param broadcast true to hit every non-harvested Tensix via the multicast TLB.
  * @param noc_x     X coordinate when @p broadcast is false, in the active coordinate system.

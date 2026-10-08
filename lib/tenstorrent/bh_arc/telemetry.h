@@ -79,8 +79,16 @@ typedef struct {
 	 */
 	uint32_t gddr_therm_trip: 1;
 
+	/** @brief ECC feature: NOC header ECC, Tensix L1 ECC scrubber, and the
+	 * NOC / L1 ECC error counters in telemetry.
+	 *
+	 * Seeded from @c feature_enable.ecc_en in the firmware table (overridable
+	 * via CCFGOVR).
+	 */
+	uint32_t ecc: 1;
+
 	/** @brief Reserved for future use. */
-	uint32_t reserved: 30;
+	uint32_t reserved: 29;
 } telemetry_feature_flags_bits_0_t;
 
 /** @brief Packed 32-bit representation of @ref telemetry_feature_flags_bits_0_t. */

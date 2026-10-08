@@ -26,6 +26,7 @@
 #ifdef CONFIG_BH_FWTABLE
 #include "aiclk_ppm.h"
 #include "cat.h"
+#include "chip_info.h"
 #include "cm2dm_msg.h"
 #include "fan_ctrl.h"
 #include "functional_efuse.h"
@@ -518,6 +519,7 @@ static void write_static_telemetry(uint32_t app_version)
 
 	fw_capabilities.bits.kernel_nops_at_aiclk_fmin = 1U;
 	fw_capabilities.bits.gddr_therm_trip = 1U;
+	fw_capabilities.bits.ecc = 1U;
 	telemetry[TAG_FW_CAPABILITIES_0] = fw_capabilities.u32_all;
 
 	active_config.bits.kernel_nops_at_aiclk_fmin =
@@ -525,6 +527,7 @@ static void write_static_telemetry(uint32_t app_version)
 			->feature_enable.kernel_throttler_at_floor_en;
 	active_config.bits.gddr_therm_trip =
 		tt_bh_fwtable_get_fw_table(fwtable_dev)->feature_enable.gddr_therm_trip_en;
+	active_config.bits.ecc = bh_chip_info_feature_ecc_en();
 	telemetry[TAG_FW_ACTIVE_CONFIG_0] = active_config.u32_all;
 }
 
@@ -609,7 +612,8 @@ static void update_telemetry(void)
 
 	/*
 	 * ECC totals are accumulated by ecc_monitor from the Tensix error interrupts on this
-	 * same work queue; this is a copy, not a NOC walk.
+	 * same work queue; this is a copy, not a NOC walk. With the ecc capability off the
+	 * monitor never starts and the tags stay at zero.
 	 */
 	struct ecc_totals ecc;
 

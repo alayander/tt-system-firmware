@@ -388,7 +388,7 @@ static int ecc_force_handler(const struct shell *sh, size_t argc, char **argv)
 	NocEccStateLock();
 	if (!NocEccEnabled() || !NocTensixRoutersUp()) {
 		NocEccStateUnlock();
-		shell_error(sh, "Tensix routers are down");
+		shell_error(sh, "NOC ECC disabled or Tensix routers down");
 		return -EBUSY;
 	}
 	NocEccReadCounters(noc_x, noc_y, before);
@@ -430,7 +430,7 @@ static int ecc_probe_handler(const struct shell *sh, size_t argc, char **argv)
 	NocEccStateLock();
 	if (!NocEccEnabled() || !NocTensixRoutersUp()) {
 		NocEccStateUnlock();
-		shell_error(sh, "Tensix routers are down");
+		shell_error(sh, "NOC ECC disabled or Tensix routers down");
 		return -EBUSY;
 	}
 	TensixEccProbe(noc_x, noc_y, &probe);

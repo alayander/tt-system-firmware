@@ -443,12 +443,16 @@ int NocInit(void)
 		ProgramBroadcastExclusion(bad_tensix_cols);
 	}
 
-	EnableNocEccEncode();
-	/* Pre-encode packets from this walk drain, then every router checks. */
-	EnableNocEccCheck(NOC_ECC_DRAIN_WAIT_US);
+	bool ecc_en = bh_chip_info_feature_ecc_en();
+
+	if (ecc_en) {
+		EnableNocEccEncode();
+		/* Pre-encode packets from this walk drain, then every router checks. */
+		EnableNocEccCheck(NOC_ECC_DRAIN_WAIT_US);
+	}
 
 	NocEccStateLock();
-	noc_ecc_enabled = true;
+	noc_ecc_enabled = ecc_en;
 	tensix_routers_down = false;
 	NocEccStateUnlock();
 

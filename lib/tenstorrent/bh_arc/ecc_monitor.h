@@ -53,7 +53,7 @@ void EccMonitorTensixChanged(void);
  * @brief Debug snapshot of the Tensix error interrupt plumbing, for the shell.
  */
 struct ecc_monitor_irq_state {
-	/** false until init has run; nothing below is live before then. */
+	/** false when the ecc capability is off and nothing below is live. */
 	bool running;
 	/** Vectors that fired and are waiting for the work item (bit = group). */
 	uint32_t pending;

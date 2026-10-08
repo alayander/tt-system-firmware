@@ -5,6 +5,7 @@
  */
 
 #include "tensix_ecc.h"
+#include "chip_info.h"
 #include "noc_ecc.h"
 #include "noc2axi.h"
 #include "tensix.h"
@@ -85,6 +86,10 @@ BUILD_ASSERT((TENSIX_ECC_CTRL >> NOC_TLB_LOG_SIZE) == (NOC_NIU_REGS_BASE >> NOC_
 
 void TensixEccEnableScrubber(bool broadcast, uint8_t noc_x, uint8_t noc_y)
 {
+	if (!bh_chip_info_feature_ecc_en()) {
+		return;
+	}
+
 	const uint32_t rmw_byte0 = TENSIX_INSTRUCTION_RMWCIB(
 		0, SCRUBBER_BYTE0_MASK, SCRUBBER_WORD_VALUE & 0xFFu, TENSIX_CFG_ECC_SCRUBBER_WORD);
 	const uint32_t rmw_byte1 = TENSIX_INSTRUCTION_RMWCIB(1, SCRUBBER_BYTE1_MASK,
@@ -97,6 +102,10 @@ void TensixEccEnableScrubber(bool broadcast, uint8_t noc_x, uint8_t noc_y)
 
 void TensixEccArmIrq(bool broadcast, uint8_t noc_x, uint8_t noc_y)
 {
+	if (!bh_chip_info_feature_ecc_en()) {
+		return;
+	}
+
 	/*
 	 * Holding the TLB lock keeps a concurrent TensixEccServiceTile / ReadTile from having
 	 * its view select replaced between its ECC_CTRL write and ECC_STATUS read. The
