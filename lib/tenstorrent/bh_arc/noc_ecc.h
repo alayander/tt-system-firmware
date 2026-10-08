@@ -21,6 +21,7 @@
  * back through zero and briefly looks healthy.
  */
 #define NOC_NIU_REGS_BASE          0xFFB20000ull
+#define NOC_NIU1_REGS_BASE         0xFFB30000ull /* same tile, NOC 1 NIU */
 #define NOC_NIU_ECC_COUNTERS_OFF   0x50
 #define NOC_NIU_ECC_CTRL_OFF       0x5C
 #define NOC_NIU_NUM_MEM_PARITY_ERR (NOC_NIU_REGS_BASE + NOC_NIU_ECC_COUNTERS_OFF)
@@ -60,14 +61,18 @@
  */
 bool NocEccIsKnownNode(uint8_t noc_x, uint8_t noc_y);
 
+/* NIU_CFG_0 bits that matter to ECC reporting. */
+#define NOC_NIU_CFG_0_OFF          0x100
+#define NOC_NIU_CFG_0_ECC_IRQ_EN   GENMASK(11, 9) /* [9] mem parity, [10] hdr SBE, [11] hdr DBE */
+#define NOC_NIU_CFG_0_TILE_CLK_OFF BIT(12)
+
 /**
- * @brief Read NIU_CFG_0 tile-clock-off for one NOC 0 node.
+ * @brief Read NIU_CFG_0 through an already-programmed @ref NOC_ECC_TLB.
  *
- * Uses TLB 15 under the ECC lock. The telemetry work queue calls this while
- * other threads still use TLB 0. This is the hardware bit, not the shadow
- * bh_power_state_get() updates.
+ * Caller holds the ECC TLB lock and has pointed @ref NOC_ECC_TLB at a window that
+ * covers @p niu_base.
  */
-bool IsSingleTileClockGated(uint8_t noc_x, uint8_t noc_y);
+uint32_t NocNiuCfg0ReadLocked(uint64_t niu_base);
 
 /**
  * @brief NIU_CFG_0 tile-clock-off through an already-programmed @ref NOC_ECC_TLB.
@@ -110,6 +115,15 @@ void NocNiuEccReadCountersLocked(uint64_t niu_base, uint32_t out[NOC_ECC_NUM_SOU
 void NocEccReadCounters(uint8_t noc_x, uint8_t noc_y, uint32_t out[NOC_ECC_NUM_SOURCES]);
 
 /**
+ * @brief Zero the selected NIU ECC counters through an already-programmed @ref NOC_ECC_TLB.
+ *
+ * Caller holds the ECC TLB lock and has pointed @ref NOC_ECC_TLB at a window covering
+ * @p niu_base. Dropping a counter to zero also drops the NIU's error level for that source,
+ * which is what re-arms the Tensix ECC manager's edge detect for the next interrupt.
+ */
+void NocNiuEccClearLocked(uint64_t niu_base, uint8_t which);
+
+/**
  * @brief Read ARC's own NOC 0 NIU ECC counters via local MMIO.
  *
  * ARC must not NOC-TLB to its own coordinates.
@@ -128,16 +142,5 @@ void ArcNoc0EccReadCounters(uint32_t out[NOC_ECC_NUM_SOURCES]);
  * @param which Bitmask of NOC_ECC_MEM_PARITY / _HDR_SBE / _HDR_DBE bit positions.
  */
 void NocEccForce(uint8_t noc_x, uint8_t noc_y, uint8_t which);
-
-/**
- * @brief Zero the selected NOC NIU ECC error counters on a node.
- *
- * ARC is cleared through local MMIO.
- *
- * @param noc_x NOC 0 X coordinate of the node.
- * @param noc_y NOC 0 Y coordinate of the node.
- * @param which Bitmask of NOC_ECC_MEM_PARITY / _HDR_SBE / _HDR_DBE bit positions.
- */
-void NocEccClear(uint8_t noc_x, uint8_t noc_y, uint8_t which);
 
 #endif /* NOC_ECC_H */

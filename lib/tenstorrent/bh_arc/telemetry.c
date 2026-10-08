@@ -37,6 +37,9 @@
 #include "telemetry_internal.h"
 #include "gddr.h"
 #include "eth.h"
+#include "noc.h"
+#include "noc_init.h"
+#include "ecc_monitor.h"
 
 #include <string.h>
 
@@ -49,6 +52,7 @@
 #include <zephyr/drivers/clock_control/clock_control_tt_bh.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/init.h>
+#include <zephyr/kernel.h>
 #if defined(HAS_APP_VERSION)
 #include <zephyr/app_version.h>
 #else
@@ -183,6 +187,11 @@ static struct telemetry_table telemetry_table = {
 		[73] = {TAG_FW_CAPABILITIES_0, TELEM_OFFSET(TAG_FW_CAPABILITIES_0)},
 		[74] = {TAG_FW_ACTIVE_CONFIG_0, TELEM_OFFSET(TAG_FW_ACTIVE_CONFIG_0)},
 		[75] = {TAG_FLASH_JEDEC_ID, TELEM_OFFSET(TAG_FLASH_JEDEC_ID)},
+		[76] = {TAG_NOC_ECC_MEM_PARITY, TELEM_OFFSET(TAG_NOC_ECC_MEM_PARITY)},
+		[77] = {TAG_NOC_ECC_HDR_SBE, TELEM_OFFSET(TAG_NOC_ECC_HDR_SBE)},
+		[78] = {TAG_NOC_ECC_HDR_DBE, TELEM_OFFSET(TAG_NOC_ECC_HDR_DBE)},
+		[79] = {TAG_TENSIX_L1_SBE, TELEM_OFFSET(TAG_TENSIX_L1_SBE)},
+		[80] = {TAG_TENSIX_L1_DBE, TELEM_OFFSET(TAG_TENSIX_L1_DBE)},
 	},
 };
 /* clang-format on */
@@ -597,6 +606,20 @@ static void update_telemetry(void)
 	telemetry[TAG_FAN_RPM] = fan_ctrl_en ? GetFanRPM() : 0xFFFFFFFFU;
 	UpdateEthTelemetry();
 	UpdateGddrTelemetry();
+
+	/*
+	 * ECC totals are accumulated by ecc_monitor from the Tensix error interrupts on this
+	 * same work queue; this is a copy, not a NOC walk.
+	 */
+	struct ecc_totals ecc;
+
+	EccMonitorGetTotals(&ecc);
+	telemetry[TAG_NOC_ECC_MEM_PARITY] = ecc.noc[NOC_ECC_MEM_PARITY];
+	telemetry[TAG_NOC_ECC_HDR_SBE] = ecc.noc[NOC_ECC_HDR_SBE];
+	telemetry[TAG_NOC_ECC_HDR_DBE] = ecc.noc[NOC_ECC_HDR_DBE];
+	telemetry[TAG_TENSIX_L1_SBE] = ecc.l1_sbe;
+	telemetry[TAG_TENSIX_L1_DBE] = ecc.l1_dbe;
+
 	uint32_t gddr_packed[NUM_GDDR / 2];
 
 	pack_gddr_temps(&telemetry_internal_data.gddr_temps, gddr_packed);

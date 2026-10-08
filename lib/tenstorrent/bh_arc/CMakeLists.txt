@@ -73,6 +73,7 @@ if(NOT CONFIG_TT_SMC_RECOVERY)
     clock_wave.c
     counter.c
     dvfs.c
+    ecc_monitor.c
     eth.c
     fan_ctrl.c
     functional_efuse.c

@@ -22,7 +22,9 @@
 #include "asic_state.h"
 #include "noc.h"
 #include "noc_init.h"
+#include "ecc_monitor.h"
 #include "noc_ecc.h"
+#include "tensix_ecc.h"
 
 LOG_MODULE_REGISTER(tt_shell, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -380,11 +382,19 @@ static int ecc_force_handler(const struct shell *sh, size_t argc, char **argv)
 
 	/*
 	 * All three registers live in the NIU, so no clock gate check. The counters are the only
-	 * evidence the force landed: NIU ECC_CTRL is write-only.
+	 * evidence the force landed: NIU ECC_CTRL is write-only. Hold the router lock across the
+	 * access so a Tensix reset cannot drop encode after this check.
 	 */
+	NocEccStateLock();
+	if (!NocEccEnabled() || !NocTensixRoutersUp()) {
+		NocEccStateUnlock();
+		shell_error(sh, "Tensix routers are down");
+		return -EBUSY;
+	}
 	NocEccReadCounters(noc_x, noc_y, before);
 	NocEccForce(noc_x, noc_y, which);
 	NocEccReadCounters(noc_x, noc_y, after);
+	NocEccStateUnlock();
 
 	shell_print(sh, "tile: noc0 (%u, %u)   forced mask 0x%X", noc_x, noc_y, which);
 	ecc_print_counters(sh, "before:", before);
@@ -400,9 +410,9 @@ static int ecc_force_handler(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-static int ecc_clear_handler(const struct shell *sh, size_t argc, char **argv)
+static int ecc_probe_handler(const struct shell *sh, size_t argc, char **argv)
 {
-	uint32_t counters[NOC_ECC_NUM_SOURCES];
+	struct tensix_ecc_probe probe;
 	uint8_t noc_x, noc_y;
 	int ret;
 
@@ -411,11 +421,66 @@ static int ecc_clear_handler(const struct shell *sh, size_t argc, char **argv)
 		return ret;
 	}
 
-	NocEccClear(noc_x, noc_y, NOC_ECC_SOURCE_MASK);
-	NocEccReadCounters(noc_x, noc_y, counters);
+	/* ECC_CTRL/ECC_STATUS exist only in Tensix; rows 0-1 and the GDDR columns have none. */
+	if (noc_y < 2 || noc_x == 0 || noc_x == 9) {
+		shell_error(sh, "(%u, %u) is not a Tensix tile", noc_x, noc_y);
+		return -EINVAL;
+	}
 
-	shell_print(sh, "tile: noc0 (%u, %u)   cleared", noc_x, noc_y);
-	ecc_print_counters(sh, "now:", counters);
+	NocEccStateLock();
+	if (!NocEccEnabled() || !NocTensixRoutersUp()) {
+		NocEccStateUnlock();
+		shell_error(sh, "Tensix routers are down");
+		return -EBUSY;
+	}
+	TensixEccProbe(noc_x, noc_y, &probe);
+	NocEccStateUnlock();
+
+	shell_print(sh, "tile: noc0 (%u, %u)", noc_x, noc_y);
+	for (int i = 0; i < 2; i++) {
+		shell_print(
+			sh, "noc%d NIU_CFG_0: 0x%08X  ecc_int_en=0x%X  tile_clk_off=%u", i,
+			probe.niu_cfg_0[i],
+			(unsigned int)FIELD_GET(NOC_NIU_CFG_0_ECC_IRQ_EN, probe.niu_cfg_0[i]),
+			(unsigned int)FIELD_GET(NOC_NIU_CFG_0_TILE_CLK_OFF, probe.niu_cfg_0[i]));
+	}
+	ecc_print_counters(sh, "noc0:", probe.noc);
+	if (probe.clock_gated) {
+		shell_warn(sh, "tile clock off: ECC_CTRL reads as zero and the IRQ cannot fire");
+		return 0;
+	}
+	shell_print(sh, "ECC_CTRL:  0x%08X  (armed = 0x%08X)%s", probe.ecc_ctrl,
+		    (unsigned int)TENSIX_ECC_CTRL_IRQ_ARMED,
+		    (probe.ecc_ctrl & TENSIX_ECC_CTRL_IRQ_ARMED) == TENSIX_ECC_CTRL_IRQ_ARMED
+			    ? ""
+			    : "  NOT ARMED");
+	shell_print(sh,
+		    "noc level: mem_parity=%u hdr_sbe=%u hdr_dbe=%u  (what the ECC manager sees)",
+		    (unsigned int)(probe.noc_level >> NOC_ECC_MEM_PARITY) & 1U,
+		    (unsigned int)(probe.noc_level >> NOC_ECC_HDR_SBE) & 1U,
+		    (unsigned int)(probe.noc_level >> NOC_ECC_HDR_DBE) & 1U);
+
+	return 0;
+}
+
+static int ecc_status_handler(const struct shell *sh, size_t argc, char **argv)
+{
+	struct ecc_totals totals;
+	struct ecc_monitor_irq_state irq;
+
+	EccMonitorGetTotals(&totals);
+	EccMonitorGetIrqState(&irq);
+
+	shell_print(sh, "monitor: %s", irq.running ? "running" : "off (ecc capability clear)");
+	ecc_print_counters(sh, "noc:", totals.noc);
+	shell_print(sh, "l1:     sbe=%u dbe=%u", totals.l1_sbe, totals.l1_dbe);
+	shell_print(sh, "groups: pending=0x%02X masked=0x%02X blocked=0x%02X", irq.pending,
+		    irq.masked, irq.blocked);
+	for (int i = 0; i < irq.num_groups; i++) {
+		shell_print(sh, "status[%d] (tiles %3d-%3d): 0x%08X", i, i * 32, i * 32 + 31,
+			    irq.status[i]);
+	}
+
 	return 0;
 }
 
@@ -426,7 +491,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_CMD_ARG(asic_state, NULL, "[|0|3]", asic_state_handler, 1, 1),
 	SHELL_CMD_ARG(telem, NULL, "<Telemetry Index> [|x|f|d]", telem_handler, 2, 1),
 	SHELL_CMD_ARG(ecc_force, NULL, "[<noc_x> <noc_y>] [<mask>]", ecc_force_handler, 1, 3),
-	SHELL_CMD_ARG(ecc_clear, NULL, "[<noc_x> <noc_y>]", ecc_clear_handler, 1, 2),
+	SHELL_CMD_ARG(ecc_status, NULL, "", ecc_status_handler, 1, 0),
+	SHELL_CMD_ARG(ecc_probe, NULL, "[<noc_x> <noc_y>]", ecc_probe_handler, 1, 2),
 #ifdef CONFIG_TT_MSGQUEUE
 	SHELL_CMD_ARG(msg, NULL, "<cmd> [data1 ... data7]", msg_handler, 2, 7),
 	SHELL_CMD_ARG(counter, NULL, "<bank> <index>", counter_get_handler, 3, 0),

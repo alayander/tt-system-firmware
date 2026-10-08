@@ -11,14 +11,10 @@
 
 #include <zephyr/sys/util.h>
 
-/* NIU_CFG_0 is the first router config register. Bit 12 gates the tile clock. */
-#define NIU_CFG_0_OFF          0x100
-#define NIU_CFG_0_TILE_CLK_OFF 12
-
 /* ARC's local NOC 0 NIU. Same register block as NIU_0_A_REG_MAP_BASE_ADDR. */
-#define ARC_NOC0_NIU_BASE 0x80050000
 #define ARC_NOC0_X        8
 #define ARC_NOC0_Y        0
+#define ARC_NOC0_NIU_BASE 0x80050000
 
 static bool IsArcNoc0(uint8_t noc_x, uint8_t noc_y)
 {
@@ -52,24 +48,14 @@ bool NocEccIsKnownNode(uint8_t noc_x, uint8_t noc_y)
 	return noc_x != 8;
 }
 
-bool NocNiuTileClockGatedLocked(uint64_t niu_base)
+uint32_t NocNiuCfg0ReadLocked(uint64_t niu_base)
 {
-	uint32_t niu_cfg_0 = NOC2AXIRead32(NOC_ECC_RING, NOC_ECC_TLB, niu_base + NIU_CFG_0_OFF);
-
-	return (niu_cfg_0 & BIT(NIU_CFG_0_TILE_CLK_OFF)) != 0;
+	return NOC2AXIRead32(NOC_ECC_RING, NOC_ECC_TLB, niu_base + NOC_NIU_CFG_0_OFF);
 }
 
-bool IsSingleTileClockGated(uint8_t noc_x, uint8_t noc_y)
+bool NocNiuTileClockGatedLocked(uint64_t niu_base)
 {
-	uint64_t niu_base = NiuBaseForNoc0(noc_x, noc_y);
-	bool gated;
-
-	NocEccTlbLock();
-	NOC2AXITlbSetup(NOC_ECC_RING, NOC_ECC_TLB, noc_x, noc_y, niu_base);
-	gated = NocNiuTileClockGatedLocked(niu_base);
-	NocEccTlbUnlock();
-
-	return gated;
+	return (NocNiuCfg0ReadLocked(niu_base) & NOC_NIU_CFG_0_TILE_CLK_OFF) != 0;
 }
 
 void NocNiuEccReadCountersLocked(uint64_t niu_base, uint32_t out[NOC_ECC_NUM_SOURCES])
@@ -109,6 +95,12 @@ void NocEccReadCounters(uint8_t noc_x, uint8_t noc_y, uint32_t out[NOC_ECC_NUM_S
 	NocNiuEccReadCounters(noc_x, noc_y, NiuBaseForNoc0(noc_x, noc_y), out);
 }
 
+void NocNiuEccClearLocked(uint64_t niu_base, uint8_t which)
+{
+	NOC2AXIWrite32(NOC_ECC_RING, NOC_ECC_TLB, niu_base + NOC_NIU_ECC_CTRL_OFF,
+		       FIELD_PREP(NOC_NIU_ECC_CTRL_CLEAR, which & NOC_ECC_SOURCE_MASK));
+}
+
 /* Single write to the write-only NIU ECC_CTRL. @p value must already be positioned. */
 static void NocNiuEccCtrlWrite(uint8_t noc_x, uint8_t noc_y, uint64_t niu_base, uint32_t value)
 {
@@ -139,10 +131,4 @@ void NocEccForce(uint8_t noc_x, uint8_t noc_y, uint8_t which)
 {
 	NocEccCtrlWrite(noc_x, noc_y,
 			FIELD_PREP(NOC_NIU_ECC_CTRL_FORCE, which & NOC_ECC_SOURCE_MASK));
-}
-
-void NocEccClear(uint8_t noc_x, uint8_t noc_y, uint8_t which)
-{
-	NocEccCtrlWrite(noc_x, noc_y,
-			FIELD_PREP(NOC_NIU_ECC_CTRL_CLEAR, which & NOC_ECC_SOURCE_MASK));
 }
