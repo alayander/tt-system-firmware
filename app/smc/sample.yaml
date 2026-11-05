@@ -101,6 +101,30 @@ tests:
     extra_args:
       - dmc_CONFIG_DMC_RUN_SMBUS_TESTS=y
       - CONFIG_ASSERT=y
+  # Boots Linux on the L2CPU cluster the SMC parks at init, using the
+  # tt-bh-linux release payloads (downloaded) and console daemon (built).
+  # Nightly only: it needs network access and a few minutes for the fetch.
+  app.l2cpu-linux:
+    tags: e2e-stress
+    timeout: 720
+    platform_allow:
+      - tt_blackhole@p150a/tt_blackhole/smc
+      - tt_blackhole@p150b/tt_blackhole/smc
+      - tt_blackhole@p300a/tt_blackhole/smc
+      - tt_blackhole@p300c/tt_blackhole/smc
+    harness: pytest
+    sysbuild: true
+    harness_config:
+      pytest_root:
+        - pytest/e2e_l2cpu_linux.py
+      pytest_args:
+        - "--dut-scope=session"
+        - "--log-cli-level=INFO"
+      record:
+        regex:
+          - >-
+            INFO: (?P<test_name>.*) completed.
+            Failed (?P<fail_count>\d+)/(?P<total_tries>\d+) times.
   app.tracing:
     build_only: true
     sysbuild: true
