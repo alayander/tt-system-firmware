@@ -454,6 +454,17 @@ int l2cpu_resident_cluster(void)
 	return resident_l2cpu;
 }
 
+uint32_t l2cpu_running_gddr_mask(void)
+{
+	const uint8_t all_harts = BIT_MASK(L2CPU_NUM_HARTS);
+
+	if (resident_l2cpu < 0 || l2cpu_resident_ready_mask(resident_l2cpu) == all_harts) {
+		return 0;
+	}
+
+	return BIT(kL2CpuGddrInst[resident_l2cpu]);
+}
+
 /*
  * Park one cluster in the resident stub: the lowest-numbered one that is not harvested and
  * whose GDDR is usable. The stub lives in the cluster's L3, so parking needs nothing from

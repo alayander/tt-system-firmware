@@ -62,6 +62,16 @@ extern "C" {
  */
 int l2cpu_resident_cluster(void);
 
+/**
+ * @brief Bitmask of GDDR instances that must stay out of PHY powerdown for the resident
+ * cluster: its backing instance once any hart has left the stub, otherwise 0.
+ *
+ * A parked cluster runs entirely out of its L3 and needs nothing from its GDDR instance;
+ * once a hart has jumped, the payload runs from DRAM. set_mrisc_power_setting() consults
+ * this; it reads the resident cluster's mailbox over the NOC.
+ */
+uint32_t l2cpu_running_gddr_mask(void);
+
 #ifdef __cplusplus
 }
 #endif
