@@ -67,10 +67,12 @@ runs:
         bash "${{ inputs.app-path }}/scripts/ci/build-and-load-kmd.sh" \
           "${{ inputs.kmd-version }}"
 
-    - name: Install ipmitool
+    - name: Install test dependencies
       shell: bash
       run: |
-        apt update && apt install -y ipmitool
+        # ipmitool: galaxy power control; libslirp/libvdeslirp: build the
+        # tt-bh-linux console daemon for the L2CPU Linux boot test
+        apt update && apt install -y ipmitool libslirp-dev libvdeslirp-dev
 
     - name: Environment Setup
       shell: bash
