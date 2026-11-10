@@ -17,6 +17,7 @@
 
 	pll4: pll4 {
 		compatible = "tenstorrent,clock-control-emul";
+		default-rate = <800>;
 		status = "okay";
 	};
 
