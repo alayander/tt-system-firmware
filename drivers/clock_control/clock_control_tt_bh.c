@@ -494,7 +494,14 @@ static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_
 		}
 
 		clock_control_tt_bh_update(config, data, &settings);
-	} else if (clock == CLOCK_CONTROL_TT_BH_CLOCK_AICLK) {
+	} else if (clock == CLOCK_CONTROL_TT_BH_CLOCK_AICLK ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_1 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_2 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_3) {
+		bool is_l2cpu = (clock != CLOCK_CONTROL_TT_BH_CLOCK_AICLK);
+		uint8_t postdiv_index =
+			is_l2cpu ? (uint8_t)(clock - CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0) : 0;
 		uint32_t target_fbdiv;
 		union tt_bh_pll_cntl_1_reg pll_cntl_1;
 		union tt_bh_pll_cntl_5_reg pll_cntl_5;
@@ -503,9 +510,25 @@ static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_
 		pll_cntl_1.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_1_OFFSET);
 		pll_cntl_5.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_5_OFFSET);
 		use_postdiv.val = clock_control_tt_bh_read_reg(config, PLL_USE_POSTDIV_OFFSET);
-		target_fbdiv =
-			clock_control_tt_bh_calculate_fbdiv(config->refclk_rate, (uint32_t)rate,
-							    pll_cntl_1, pll_cntl_5, use_postdiv, 0);
+		target_fbdiv = clock_control_tt_bh_calculate_fbdiv(config->refclk_rate,
+								   (uint32_t)rate, pll_cntl_1,
+								   pll_cntl_5, use_postdiv,
+								   postdiv_index);
+
+		if (is_l2cpu) {
+			if (target_fbdiv == 0) {
+				k_spin_unlock(&data->lock, key);
+				return -EINVAL;
+			}
+
+			uint32_t target_vco =
+				(config->refclk_rate * target_fbdiv) / pll_cntl_1.f.refdiv;
+
+			if (!IN_RANGE(target_vco, VCO_MIN_FREQ, VCO_MAX_FREQ)) {
+				k_spin_unlock(&data->lock, key);
+				return -ERANGE;
+			}
+		}
 
 		while (pll_cntl_1.f.fbdiv != target_fbdiv) {
 			if (target_fbdiv > pll_cntl_1.f.fbdiv) {

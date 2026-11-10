@@ -14,6 +14,7 @@
 #include "vf_curve.h"
 #include "throttler.h"
 #include "aiclk_ppm.h"
+#include "l2cpuclk_ppm.h"
 #include "voltage.h"
 #include "init.h"
 #include "reg.h"
@@ -63,9 +64,12 @@ void DVFSChange(void)
 
 	CalculateTargVoltage();
 
+	/* Drop L2CPUCLK before AICLK falls and raise it only after AICLK has climbed. */
+	DecreaseL2CPUClk(targ_freq);
 	DecreaseAiclk();
 	VoltageChange();
 	IncreaseAiclk();
+	IncreaseL2CPUClk(targ_freq);
 }
 
 static void dvfs_work_handler(struct k_work *work)
