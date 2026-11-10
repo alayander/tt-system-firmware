@@ -199,7 +199,9 @@ ZTEST(l2cpuclk_ppm, test_increase_hook_never_lowers)
 		      "Decrease-before hook should complete the drop to 1500 MHz");
 }
 
-/* The policy must leave the clock untouched while the L2CPU domain is powered down. */
+/* The policy must leave the clock untouched while the L2CPU domain is powered down, and
+ * resume driving it once the domain is powered back up.
+ */
 ZTEST(l2cpuclk_ppm, test_powered_off_is_noop)
 {
 	/* Establish a known 1750 MHz point while powered, then power the domain down. */
@@ -212,14 +214,22 @@ ZTEST(l2cpuclk_ppm, test_powered_off_is_noop)
 
 	uint32_t rate_before = get_l2cpuclk();
 
-	/* Both busy->idle (would lower) and a high-AICLK pass (would raise) must no-op. */
+	/* Both busy->idle (would lower) and a high-AICLK pass (would raise) must no-op
+	 * while powered down - the policy must not retune a gated cluster.
+	 */
 	set_busy(false);
 	apply_policy(AICLK_LOW_MHZ);
 	set_busy(true);
 	apply_policy(AICLK_HIGH_MHZ);
-
 	zassert_equal(get_l2cpuclk(), rate_before,
 		      "Policy must not retune L2CPUCLK while powered down");
+
+	/* Re-enable the domain and confirm the policy resumes driving it. */
+	set_l2cpu_power(true);
+	set_busy(true);
+	apply_policy(AICLK_HIGH_MHZ);
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_HIGH_MHZ,
+		      "Policy should resume once the domain is powered back up");
 }
 
 /* Leave shared state clean (L2CPU powered, AICLK idle) for later suites. */
