@@ -54,6 +54,12 @@ int32_t bh_set_l2cpu_enable(bool enable)
 			pll4, (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_3);
 	}
 
+	/*
+	 * Keep the tracked power state in sync with the actual clock gating for every caller,
+	 * so power_state stays the authoritative L2CPU power state.
+	 */
+	power_state[BH_POWER_DOMAIN_L2CPU] = enable;
+
 	return ret;
 }
 
@@ -99,9 +105,11 @@ static int32_t apply_power_settings(const struct power_setting_rqst *power_setti
 		 */
 	}
 	if (power_setting->power_flags_valid > BH_POWER_DOMAIN_L2CPU) {
+		/*
+		 * bh_set_l2cpu_enable() updates power_state[BH_POWER_DOMAIN_L2CPU]
+		 * itself to account for calls from other contexts (ie. tt_shell).
+		 */
 		ret = bh_set_l2cpu_enable(power_setting->power_flags_bitfield.l2cpu_enable);
-		power_state[BH_POWER_DOMAIN_L2CPU] =
-			power_setting->power_flags_bitfield.l2cpu_enable;
 	}
 
 	if (power_setting->power_flags_valid > BH_POWER_DOMAIN_MRISC) {
