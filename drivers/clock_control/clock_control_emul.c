@@ -68,7 +68,12 @@ static int clock_control_emul_get_rate(const struct device *dev, clock_control_s
 		return -EINVAL;
 	}
 
-	if (data->clock_rates[subsys_id] == 0) {
+	if (!data->clock_enabled[subsys_id]) {
+		/* A gated-off clock produces no output, mirroring the real PLL driver whose
+		 * get_rate() returns 0 once the external postdiv is disabled.
+		 */
+		*rate = 0;
+	} else if (data->clock_rates[subsys_id] == 0) {
 		*rate = config->default_rate;
 	} else {
 		*rate = data->clock_rates[subsys_id];

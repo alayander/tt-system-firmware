@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "aiclk_ppm.h"
 #include "l2cpuclk_ppm.h"
 
-#include <tenstorrent/bh_power.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/clock_control_tt_bh.h>
+#include <zephyr/drivers/reset.h>
+#include <zephyr/dt-bindings/reset/tt-bh-reset.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/tracing/tracing.h>
 
@@ -25,34 +26,59 @@ LOG_MODULE_REGISTER(l2cpuclk_ppm, CONFIG_TT_APP_LOG_LEVEL);
 /* AICLK at/above this (MHz) lets the busy L2CPUCLK run at its high operating point. */
 #define L2CPUCLK_AICLK_THRESHOLD_MHZ 1340
 
+/*
+ * Dwell on the climb to the high operating point. The drop to 1500 is immediate
+ * so every excursion below 1340 is covered for voltage safety, while the raise to 1750
+ * requires AICLK to stay at/above the threshold continuously for this long. AICLK jitter
+ * around 1340 cannot bounce the clock between 1500 and 1750.
+ */
+#define L2CPUCLK_RAISE_HOLD_MS 100
+
+/*
+ * PLL4's feedback divider moves in ~12.5 MHz steps,
+ * so this absorbs divider rounding without churning PLL4.
+ */
+#define L2CPUCLK_RATE_TOLERANCE_MHZ 25
+
 static const struct device *const pll_dev_4 = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(pll4));
+static const struct device *const l2cpu_reset_dev =
+	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(l2cpu_reset));
+
+#define L2CPU_CLUSTER_COUNT 4
 
 /*
- * Last frequency (MHz) PLL4 programmed to. 0 means "not yet known"; the first
- * update seeds it from hardware so the initial step moves in the correct direction.
+ * Uptime (ms) when the current "busy and AICLK >= threshold" streak began, or -1 when no
+ * such streak is active. Drives the raise hold; sampled once per DVFS pass via each hook.
  */
-static uint32_t l2cpuclk_curr_mhz;
+static int64_t l2cpuclk_high_since_ms = -1;
 
 /*
- * The policy only drives PLL4 while the L2CPU power domain is on. With the clusters
- * powered down the external postdivs are clock gated, so retuning the VCO has no effect;
- * skip it rather than churn PLL4 on every DVFS pass.
+ * True once the host has taken any L2CPU cluster out of RISC reset. Release is a one-way
+ * hardware event (a hart leaves reset at most once per ASIC-reset lifetime, and an ASIC reset
+ * restarts this firmware), so a live read of the reset lines is authoritative; there is no need
+ * to cache it.
  */
-static bool l2cpuclk_powered(void)
+static bool l2cpu_released(void)
 {
-	bool enabled = false;
-
-	if (bh_power_state_get(BH_POWER_DOMAIN_L2CPU, &enabled) != 0 || !enabled) {
-		l2cpuclk_curr_mhz = 0;
+	if (l2cpu_reset_dev == NULL || !device_is_ready(l2cpu_reset_dev)) {
 		return false;
 	}
 
-	return true;
+	for (int n = 0; n < L2CPU_CLUSTER_COUNT; n++) {
+		uint8_t in_reset = 1;
+
+		if (reset_status(l2cpu_reset_dev, TT_BH_L2CPU_RISC_ID(n), &in_reset) == 0 &&
+		    in_reset == 0) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 uint32_t L2CPUClkPolicyTarget(uint32_t aiclk_targ_mhz)
 {
-	if (!aiclk_get_busy()) {
+	if (!l2cpu_released()) {
 		return L2CPUCLK_IDLE_MHZ;
 	}
 
@@ -60,32 +86,51 @@ uint32_t L2CPUClkPolicyTarget(uint32_t aiclk_targ_mhz)
 							       : L2CPUCLK_BUSY_LOW_MHZ;
 }
 
-/* Seed l2cpuclk_curr_mhz from the current PLL4 rate the first time we run. */
-static void l2cpuclk_ensure_seeded(void)
+static uint32_t l2cpuclk_held_target(uint32_t aiclk_targ_mhz)
 {
-	if (l2cpuclk_curr_mhz != 0) {
-		return;
+	uint32_t target = L2CPUClkPolicyTarget(aiclk_targ_mhz);
+
+	if (target != L2CPUCLK_BUSY_HIGH_MHZ) {
+		l2cpuclk_high_since_ms = -1;
+		return target;
 	}
 
+	int64_t now = k_uptime_get();
+
+	if (l2cpuclk_high_since_ms < 0) {
+		l2cpuclk_high_since_ms = now;
+	}
+
+	if ((now - l2cpuclk_high_since_ms) < L2CPUCLK_RAISE_HOLD_MS) {
+		return L2CPUCLK_BUSY_LOW_MHZ;
+	}
+
+	return L2CPUCLK_BUSY_HIGH_MHZ;
+}
+
+/*
+ * Live PLL4 rate (MHz) for the shared L2CPUCLK VCO, or 0 if it cannot be read this pass
+ * (device not ready, or the clock_control lock was busy). The hooks reconcile against
+ * this actual rate rather than a cached value, so a rate programmed outside the policy
+ * is corrected on the next pass instead of lingering until the target next crosses a
+ * step boundary.
+ */
+static uint32_t l2cpuclk_actual_mhz(void)
+{
 	uint32_t rate = 0;
 
-	if (pll_dev_4 != NULL && device_is_ready(pll_dev_4) &&
+	if (pll_dev_4 == NULL || !device_is_ready(pll_dev_4) ||
 	    clock_control_get_rate(pll_dev_4,
 				   (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0,
-				   &rate) == 0 &&
-	    rate != 0) {
-		l2cpuclk_curr_mhz = rate;
-	} else {
-		l2cpuclk_curr_mhz = L2CPUCLK_IDLE_MHZ;
+				   &rate) != 0) {
+		return 0;
 	}
+
+	return rate;
 }
 
 static void l2cpuclk_set(uint32_t mhz)
 {
-	if (mhz == l2cpuclk_curr_mhz) {
-		return;
-	}
-
 	if (pll_dev_4 == NULL || !device_is_ready(pll_dev_4)) {
 		return;
 	}
@@ -102,38 +147,58 @@ static void l2cpuclk_set(uint32_t mhz)
 		return;
 	}
 
-	l2cpuclk_curr_mhz = mhz;
 	sys_trace_named_event("l2cpuclk_update", mhz, 0);
+}
+
+static bool l2cpuclk_resolve(uint32_t aiclk_targ_mhz, uint32_t *target, uint32_t *actual)
+{
+	/*
+	 * A rate of 0 means PLL4 is not producing an L2CPUCLK this pass: either it was never
+	 * brought up, or the L2CPU was clock gated, so skip the pass rather than churn PLL4.
+	 */
+	*actual = l2cpuclk_actual_mhz();
+
+	if (*actual == 0) {
+		l2cpuclk_high_since_ms = -1;
+		return false;
+	}
+
+	*target = l2cpuclk_held_target(aiclk_targ_mhz);
+	return true;
 }
 
 void DecreaseL2CPUClk(uint32_t aiclk_targ_mhz)
 {
-	if (!l2cpuclk_powered()) {
+	uint32_t target;
+	uint32_t actual;
+
+	if (!l2cpuclk_resolve(aiclk_targ_mhz, &target, &actual)) {
 		return;
 	}
 
-	l2cpuclk_ensure_seeded();
-
-	uint32_t target = L2CPUClkPolicyTarget(aiclk_targ_mhz);
-
-	/* Only the lowering direction is ordered ahead of the AICLK decrease. */
-	if (target < l2cpuclk_curr_mhz) {
+	/*
+	 * Only the lowering direction is ordered ahead of the AICLK decrease. Compare
+	 * against the live rate so a rate programmed outside the policy is pulled back
+	 * down.
+	 */
+	if (target + L2CPUCLK_RATE_TOLERANCE_MHZ < actual) {
 		l2cpuclk_set(target);
 	}
 }
 
 void IncreaseL2CPUClk(uint32_t aiclk_targ_mhz)
 {
-	if (!l2cpuclk_powered()) {
+	uint32_t target;
+	uint32_t actual;
+
+	if (!l2cpuclk_resolve(aiclk_targ_mhz, &target, &actual)) {
 		return;
 	}
 
-	l2cpuclk_ensure_seeded();
-
-	uint32_t target = L2CPUClkPolicyTarget(aiclk_targ_mhz);
-
-	/* Raising follows the AICLK increase, so it may track AICLK immediately. */
-	if (target > l2cpuclk_curr_mhz) {
+	/* Raising follows the AICLK increase. The climb to 1750 only happens once the
+	 * raise hold in l2cpuclk_held_target() has elapsed.
+	 */
+	if (target > actual + L2CPUCLK_RATE_TOLERANCE_MHZ) {
 		l2cpuclk_set(target);
 	}
 }
