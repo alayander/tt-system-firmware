@@ -28,6 +28,9 @@ choice LOG_BACKEND_RTT_MODE
 	default LOG_BACKEND_RTT_MODE_OVERWRITE
 endchoice
 
+config TT_BH_ARC_GDDR_CA_LATCH
+	default n if BOARD_REVISION = "orion_slt"
+
 endif
 
 # RTT is the primary log backend for devices connected via JTAG or SWD without UARTs
