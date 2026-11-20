@@ -32,12 +32,6 @@
  *   - Lowering L2CPUCLK (e.g. 1750 -> 1500 when AICLK is about to drop below the
  *     threshold, or -> 800 on going idle) happens BEFORE AICLK decreases.
  *   - Raising L2CPUCLK (e.g. 1500 -> 1750) happens AFTER AICLK increases.
- *
- * The climb to 1750 additionally carries a 100 ms dwell: AICLK must stay at or
- * above the threshold continuously for that long before the clock is raised. The drop to
- * 1500 is immediate (no hold, no minimum dip), so every excursion below 1340 is covered
- * for voltage safety. The hooks reconcile against the live PLL4 rate each pass, so a rate
- * programmed outside the policy is corrected on the following pass.
  */
 
 /** @brief Lower L2CPUCLK if the policy target dropped. Call before AICLK is decreased. */
@@ -48,8 +42,7 @@ void IncreaseL2CPUClk(uint32_t aiclk_targ_mhz);
 
 /**
  * @brief Resolve the instantaneous L2CPUCLK target (MHz) for a given AICLK target and
- *        L2CPU-started state. This is the hold-free target; the 100 ms raise hold is
- *        applied by the Increase/Decrease hooks, not here.
+ *        L2CPU-started state.
  */
 uint32_t L2CPUClkPolicyTarget(uint32_t aiclk_targ_mhz);
 

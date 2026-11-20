@@ -12,7 +12,6 @@
 #include <zephyr/drivers/clock_control/clock_control_tt_bh.h>
 #include <zephyr/drivers/reset.h>
 #include <zephyr/dt-bindings/reset/tt-bh-reset.h>
-#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/tracing/tracing.h>
 
@@ -27,14 +26,6 @@ LOG_MODULE_REGISTER(l2cpuclk_ppm, CONFIG_TT_APP_LOG_LEVEL);
 #define L2CPUCLK_AICLK_THRESHOLD_MHZ 1340
 
 /*
- * Dwell on the climb to the high operating point. The drop to 1500 is immediate
- * so every excursion below 1340 is covered for voltage safety, while the raise to 1750
- * requires AICLK to stay at/above the threshold continuously for this long. AICLK jitter
- * around 1340 cannot bounce the clock between 1500 and 1750.
- */
-#define L2CPUCLK_RAISE_HOLD_MS 100
-
-/*
  * PLL4's feedback divider moves in ~12.5 MHz steps,
  * so this absorbs divider rounding without churning PLL4.
  */
@@ -45,12 +36,6 @@ static const struct device *const l2cpu_reset_dev =
 	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(l2cpu_reset));
 
 #define L2CPU_CLUSTER_COUNT 4
-
-/*
- * Uptime (ms) when the current "busy and AICLK >= threshold" streak began, or -1 when no
- * such streak is active. Drives the raise hold; sampled once per DVFS pass via each hook.
- */
-static int64_t l2cpuclk_high_since_ms = -1;
 
 /*
  * True once the host has taken any L2CPU cluster out of RISC reset. Release is a one-way
@@ -84,28 +69,6 @@ uint32_t L2CPUClkPolicyTarget(uint32_t aiclk_targ_mhz)
 
 	return (aiclk_targ_mhz >= L2CPUCLK_AICLK_THRESHOLD_MHZ) ? L2CPUCLK_BUSY_HIGH_MHZ
 							       : L2CPUCLK_BUSY_LOW_MHZ;
-}
-
-static uint32_t l2cpuclk_held_target(uint32_t aiclk_targ_mhz)
-{
-	uint32_t target = L2CPUClkPolicyTarget(aiclk_targ_mhz);
-
-	if (target != L2CPUCLK_BUSY_HIGH_MHZ) {
-		l2cpuclk_high_since_ms = -1;
-		return target;
-	}
-
-	int64_t now = k_uptime_get();
-
-	if (l2cpuclk_high_since_ms < 0) {
-		l2cpuclk_high_since_ms = now;
-	}
-
-	if ((now - l2cpuclk_high_since_ms) < L2CPUCLK_RAISE_HOLD_MS) {
-		return L2CPUCLK_BUSY_LOW_MHZ;
-	}
-
-	return L2CPUCLK_BUSY_HIGH_MHZ;
 }
 
 /*
@@ -159,11 +122,10 @@ static bool l2cpuclk_resolve(uint32_t aiclk_targ_mhz, uint32_t *target, uint32_t
 	*actual = l2cpuclk_actual_mhz();
 
 	if (*actual == 0) {
-		l2cpuclk_high_since_ms = -1;
 		return false;
 	}
 
-	*target = l2cpuclk_held_target(aiclk_targ_mhz);
+	*target = L2CPUClkPolicyTarget(aiclk_targ_mhz);
 	return true;
 }
 
@@ -195,9 +157,6 @@ void IncreaseL2CPUClk(uint32_t aiclk_targ_mhz)
 		return;
 	}
 
-	/* Raising follows the AICLK increase. The climb to 1750 only happens once the
-	 * raise hold in l2cpuclk_held_target() has elapsed.
-	 */
 	if (target > actual + L2CPUCLK_RATE_TOLERANCE_MHZ) {
 		l2cpuclk_set(target);
 	}
