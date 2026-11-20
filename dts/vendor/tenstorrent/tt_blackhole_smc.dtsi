@@ -295,10 +295,10 @@
 
 		refdiv = <2>;
 		postdiv = <1>;
-		fbdiv = <64>;
+		fbdiv = <128>;
 		ctrl_bus1 = <0x18>;
 		ctrl_bus5 = <1>;
-		post_divs = <1 1 1 1>;
+		post_divs = <15 15 15 15>;
 		use_post_divs = <1 1 1 1>;
 		status = "disabled";
 	};

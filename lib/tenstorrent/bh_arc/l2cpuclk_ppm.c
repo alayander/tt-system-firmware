@@ -17,10 +17,9 @@
 
 LOG_MODULE_REGISTER(l2cpuclk_ppm, CONFIG_TT_APP_LOG_LEVEL);
 
-/* Policy operating points, in MHz. Busy only ever uses 1500 or 1750. */
-#define L2CPUCLK_IDLE_MHZ      800
-#define L2CPUCLK_BUSY_LOW_MHZ  1500
-#define L2CPUCLK_BUSY_HIGH_MHZ 1750
+/* Operating points (L2CPUCLK_PARK_MHZ / BUSY_LOW / BUSY_HIGH) live in l2cpuclk_ppm.h so the
+ * policy, the L2CPU power gate, and the tests share one definition.
+ */
 
 /* AICLK at/above this (MHz) lets the busy L2CPUCLK run at its high operating point. */
 #define L2CPUCLK_AICLK_THRESHOLD_MHZ 1340
@@ -43,7 +42,7 @@ static const struct device *const l2cpu_reset_dev =
  * restarts this firmware), so a live read of the reset lines is authoritative; there is no need
  * to cache it.
  */
-static bool l2cpu_released(void)
+bool L2CPUReleased(void)
 {
 	if (l2cpu_reset_dev == NULL || !device_is_ready(l2cpu_reset_dev)) {
 		return false;
@@ -63,8 +62,8 @@ static bool l2cpu_released(void)
 
 uint32_t L2CPUClkPolicyTarget(uint32_t aiclk_targ_mhz)
 {
-	if (!l2cpu_released()) {
-		return L2CPUCLK_IDLE_MHZ;
+	if (!L2CPUReleased()) {
+		return L2CPUCLK_PARK_MHZ;
 	}
 
 	return (aiclk_targ_mhz >= L2CPUCLK_AICLK_THRESHOLD_MHZ) ? L2CPUCLK_BUSY_HIGH_MHZ

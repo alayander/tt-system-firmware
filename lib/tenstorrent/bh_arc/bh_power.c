@@ -19,6 +19,7 @@
 #include "chip_info.h"
 #include "gddr.h"
 #include "bh_reset.h"
+#include "l2cpuclk_ppm.h"
 
 LOG_MODULE_REGISTER(power, CONFIG_TT_APP_LOG_LEVEL);
 static const struct device *pll4 = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(pll4));
@@ -43,6 +44,12 @@ int32_t bh_set_l2cpu_enable(bool enable)
 			pll4, (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_2);
 		ret = clock_control_on(
 			pll4, (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_3);
+
+		uint32_t rate = L2CPUReleased() ? L2CPUCLK_BUSY_LOW_MHZ : L2CPUCLK_PARK_MHZ;
+
+		ret = clock_control_set_rate(
+			pll4, (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0,
+			(clock_control_subsys_rate_t)rate);
 	} else {
 		ret = clock_control_off(
 			pll4, (clock_control_subsys_t)CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0);

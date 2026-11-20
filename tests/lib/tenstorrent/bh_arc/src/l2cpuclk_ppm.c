@@ -15,10 +15,10 @@
 #include <tenstorrent/msgqueue.h>
 #include <tenstorrent/smc_msg.h>
 
-#define L2CPUCLK_IDLE_MHZ      800
-#define L2CPUCLK_BUSY_LOW_MHZ  1500
-#define L2CPUCLK_BUSY_HIGH_MHZ 1750
-#define AICLK_THRESHOLD_MHZ    1340
+/* L2CPUCLK_PARK_MHZ / L2CPUCLK_BUSY_LOW_MHZ / L2CPUCLK_BUSY_HIGH_MHZ come from
+ * l2cpuclk_ppm.h so the test tracks the policy's operating points.
+ */
+#define AICLK_THRESHOLD_MHZ 1340
 
 /* AICLK targets comfortably on either side of the threshold. */
 #define AICLK_HIGH_MHZ 1400
@@ -118,22 +118,22 @@ static void *l2cpuclk_setup(void)
 	return NULL;
 }
 
-/* Start every test powered on, no L2CPU started yet, settled at the 800 MHz baseline. */
+/* Start every test powered on, no L2CPU started yet, settled at the 200 MHz park. */
 static void l2cpuclk_before(void *fixture)
 {
 	ARG_UNUSED(fixture);
 	set_l2cpu_power(true);
 	set_l2cpu_released(false);
 	apply_policy(AICLK_LOW_MHZ);
-	zassert_equal(get_l2cpuclk(), L2CPUCLK_IDLE_MHZ, "Expected idle 800 MHz at start");
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_PARK_MHZ, "Expected 200 MHz park at start");
 }
 
 ZTEST(l2cpuclk_ppm, test_policy_target_resolution)
 {
 	/* L2CPUClkPolicyTarget is the instantaneous target resolver. */
 	set_l2cpu_released(false);
-	zassert_equal(L2CPUClkPolicyTarget(AICLK_HIGH_MHZ), L2CPUCLK_IDLE_MHZ,
-		      "Not started must resolve to 800 MHz regardless of AICLK");
+	zassert_equal(L2CPUClkPolicyTarget(AICLK_HIGH_MHZ), L2CPUCLK_PARK_MHZ,
+		      "Not started must resolve to the 200 MHz park regardless of AICLK");
 
 	set_l2cpu_released(true);
 	zassert_equal(L2CPUClkPolicyTarget(AICLK_HIGH_MHZ), L2CPUCLK_BUSY_HIGH_MHZ,
@@ -146,12 +146,12 @@ ZTEST(l2cpuclk_ppm, test_policy_target_resolution)
 		      "Started + low AICLK must resolve to 1500 MHz");
 }
 
-/* Until an L2CPU is started, the clock stays at the 800 MHz baseline even if AICLK is high. */
+/* Until an L2CPU is started, the clock stays at the 200 MHz park even if AICLK is high. */
 ZTEST(l2cpuclk_ppm, test_not_started_is_idle)
 {
 	apply_policy(AICLK_HIGH_MHZ);
-	zassert_equal(get_l2cpuclk(), L2CPUCLK_IDLE_MHZ,
-		      "No L2CPU started -> 800 MHz regardless of AICLK");
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_PARK_MHZ,
+		      "No L2CPU started -> 200 MHz park regardless of AICLK");
 }
 
 /* Starting an L2CPU raises the floor to 1500 immediately. */
@@ -198,8 +198,8 @@ ZTEST(l2cpuclk_ppm, test_started_rise_above_threshold)
 		      "AICLK crossing 1340 should raise L2CPUCLK to 1750 MHz immediately");
 }
 
-/* Release is one-way: once latched, clearing the reset line (only possible in emul) must
- * NOT return the policy to the 800 MHz pre-boot baseline - the floor stays at 1500 MHz.
+/* Release is one-way in hardware, but the emul reset controller lets us clear the reset line
+ * again so we can exercise the policy falling back to the 200 MHz park.
  */
 ZTEST(l2cpuclk_ppm, test_unstarted_returns_to_idle)
 {
@@ -207,11 +207,11 @@ ZTEST(l2cpuclk_ppm, test_unstarted_returns_to_idle)
 	settle_busy_high(AICLK_HIGH_MHZ);
 	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_HIGH_MHZ, "Precondition: 1750 MHz");
 
-	/* With the L2CPU back in reset, the policy must fall to the 800 MHz idle baseline. */
+	/* With the L2CPU back in reset, the policy must fall to the 200 MHz park. */
 	set_l2cpu_released(false);
 	apply_policy(AICLK_LOW_MHZ);
-	zassert_equal(get_l2cpuclk(), L2CPUCLK_IDLE_MHZ,
-		      "Unstarted L2CPU must return to 800 MHz idle");
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_PARK_MHZ,
+		      "Unstarted L2CPU must return to the 200 MHz park");
 }
 
 /* The lower-before hook must only lower; the raise is the after hook's job. */
@@ -309,12 +309,38 @@ ZTEST(l2cpuclk_ppm, test_external_underwrite_pulled_up)
 	settle_busy_high(AICLK_HIGH_MHZ);
 	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_HIGH_MHZ, "Precondition: 1750 MHz");
 
-	inject_external_rate(L2CPUCLK_IDLE_MHZ);
-	zassert_equal(get_l2cpuclk(), L2CPUCLK_IDLE_MHZ, "Injected rate should be 800 MHz");
+	inject_external_rate(L2CPUCLK_PARK_MHZ);
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_PARK_MHZ, "Injected rate should be 200 MHz");
 
 	apply_policy(AICLK_HIGH_MHZ);
 	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_HIGH_MHZ,
 		      "Policy must raise an externally-lowered rate back to 1750 MHz");
+}
+
+/* The power gate must bring an L2CPU up at the reset-state-appropriate operating point: the
+ * 200 MHz park while unreleased (so the host releases at low speed), and the 1500 MHz floor
+ * once released. This is what keeps release-at-200 robust against kmd power toggles.
+ */
+ZTEST(l2cpuclk_ppm, test_power_enable_parks_until_released)
+{
+	/* A fresh power-on while unreleased must land on the 200 MHz park, not 1600. */
+	set_l2cpu_released(false);
+	set_l2cpu_power(false);
+	set_l2cpu_power(true);
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_PARK_MHZ,
+		      "Enabling an unreleased L2CPU must park at 200 MHz");
+
+	/* A power-on while released must come up at the 1500 MHz floor. */
+	set_l2cpu_released(true);
+	set_l2cpu_power(false);
+	set_l2cpu_power(true);
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_LOW_MHZ,
+		      "Enabling a released L2CPU must come up at the 1500 MHz floor");
+
+	/* And the policy still ramps to 1750 under high AICLK. */
+	apply_policy(AICLK_HIGH_MHZ);
+	zassert_equal(get_l2cpuclk(), L2CPUCLK_BUSY_HIGH_MHZ,
+		      "Policy ramps a released L2CPU to 1750 MHz under load");
 }
 
 /* Leave shared state clean (L2CPU powered, not started) for later suites. */

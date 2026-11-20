@@ -461,6 +461,103 @@ static enum clock_control_status clock_control_tt_bh_get_status(const struct dev
 	return CLOCK_CONTROL_STATUS_UNKNOWN;
 }
 
+/*
+ * L2CPUCLK operating points. The external postdiv doubles as the clock gate (value 0 gates the
+ * output), so a running L2CPUCLK always needs a nonzero postdiv. 200 MHz in particular cannot use
+ * the eff-postdiv-2 the higher points use, it needs a larger postdiv.
+ */
+struct tt_bh_l2cpu_opp {
+	uint32_t mhz;
+	uint16_t fbdiv;  /* VCO = refclk_rate * fbdiv / refdiv */
+	uint8_t postdiv; /* raw PLL_CNTL_5 value for every cluster; eff postdiv = value + 1 */
+};
+
+static const struct tt_bh_l2cpu_opp l2cpu_opps[] = {
+	{200, 128, 15}, /* release-safe park: eff 16, VCO 3200 */
+	{1500, 120, 1}, /* released idle:     eff 2,  VCO 3000 */
+	{1750, 140, 1}, /* released busy:     eff 2,  VCO 3500 */
+};
+
+/* Drive all four cluster external postdivs to the same value in one PLL_CNTL_5 write. */
+static void clock_control_tt_bh_write_postdivs(const struct clock_control_tt_bh_config *config,
+					       union tt_bh_pll_cntl_5_reg *pll_cntl_5,
+					       uint8_t postdiv)
+{
+	pll_cntl_5->f.postdiv0 = postdiv;
+	pll_cntl_5->f.postdiv1 = postdiv;
+	pll_cntl_5->f.postdiv2 = postdiv;
+	pll_cntl_5->f.postdiv3 = postdiv;
+	clock_control_tt_bh_write_reg(config, PLL_CNTL_5_OFFSET, pll_cntl_5->val);
+	k_busy_wait_ns(100);
+}
+
+/*
+ * Retune L2CPUCLK (PLL4) to a fixed operating point without relocking the VCO, so the output never
+ * overshoots the target. Starts from whatever is live, so it also un-gates a cluster whose postdiv
+ * was parked at 0.
+ */
+static int clock_control_tt_bh_set_l2cpu_opp(const struct clock_control_tt_bh_config *config,
+					     struct clock_control_tt_bh_data *data, uint32_t mhz)
+{
+	const struct tt_bh_l2cpu_opp *opp = NULL;
+
+	for (size_t i = 0; i < ARRAY_SIZE(l2cpu_opps); i++) {
+		if (l2cpu_opps[i].mhz == mhz) {
+			opp = &l2cpu_opps[i];
+			break;
+		}
+	}
+
+	if (opp == NULL) {
+		return -EINVAL;
+	}
+
+	union tt_bh_pll_cntl_1_reg pll_cntl_1;
+	union tt_bh_pll_cntl_5_reg pll_cntl_5;
+	union tt_bh_pll_use_postdiv_reg use_postdiv;
+
+	pll_cntl_1.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_1_OFFSET);
+	pll_cntl_5.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_5_OFFSET);
+	use_postdiv.val = clock_control_tt_bh_read_reg(config, PLL_USE_POSTDIV_OFFSET);
+
+	uint32_t target_vco = (config->refclk_rate * opp->fbdiv) / pll_cntl_1.f.refdiv;
+
+	if (!IN_RANGE(target_vco, VCO_MIN_FREQ, VCO_MAX_FREQ)) {
+		return -ERANGE;
+	}
+
+	use_postdiv.f.pll_use_postdiv0 = 1;
+	use_postdiv.f.pll_use_postdiv1 = 1;
+	use_postdiv.f.pll_use_postdiv2 = 1;
+	use_postdiv.f.pll_use_postdiv3 = 1;
+	clock_control_tt_bh_write_reg(config, PLL_USE_POSTDIV_OFFSET, use_postdiv.val);
+
+	uint8_t cur_postdiv = pll_cntl_5.f.postdiv0;
+
+	while (cur_postdiv < opp->postdiv) {
+		cur_postdiv++;
+		clock_control_tt_bh_write_postdivs(config, &pll_cntl_5, cur_postdiv);
+	}
+
+	while (pll_cntl_1.f.fbdiv != opp->fbdiv) {
+		pll_cntl_1.f.fbdiv += (opp->fbdiv > pll_cntl_1.f.fbdiv) ? 1 : -1;
+		clock_control_tt_bh_write_reg(config, PLL_CNTL_1_OFFSET, pll_cntl_1.val);
+		k_busy_wait_ns(100);
+	}
+
+	while (cur_postdiv > opp->postdiv) {
+		cur_postdiv--;
+		clock_control_tt_bh_write_postdivs(config, &pll_cntl_5, cur_postdiv);
+	}
+
+	/* Keep the cached settings in step so a later enable()/relock reproduces this point. */
+	data->settings.pll_cntl_1 = pll_cntl_1;
+	data->settings.pll_cntl_5 = pll_cntl_5;
+	data->settings.use_postdiv = use_postdiv;
+
+	return 0;
+}
+
 static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_subsys_t sys,
 					clock_control_subsys_rate_t rate)
 {
@@ -494,15 +591,7 @@ static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_
 		}
 
 		clock_control_tt_bh_update(config, data, &settings);
-	} else if (clock == CLOCK_CONTROL_TT_BH_CLOCK_AICLK ||
-		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0 ||
-		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_1 ||
-		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_2 ||
-		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_3) {
-		bool is_l2cpu = (clock != CLOCK_CONTROL_TT_BH_CLOCK_AICLK);
-		uint8_t postdiv_index =
-			is_l2cpu ? (uint8_t)(clock - CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0) : 0;
-		uint32_t target_fbdiv;
+	} else if (clock == CLOCK_CONTROL_TT_BH_CLOCK_AICLK) {
 		union tt_bh_pll_cntl_1_reg pll_cntl_1;
 		union tt_bh_pll_cntl_5_reg pll_cntl_5;
 		union tt_bh_pll_use_postdiv_reg use_postdiv;
@@ -510,25 +599,9 @@ static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_
 		pll_cntl_1.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_1_OFFSET);
 		pll_cntl_5.val = clock_control_tt_bh_read_reg(config, PLL_CNTL_5_OFFSET);
 		use_postdiv.val = clock_control_tt_bh_read_reg(config, PLL_USE_POSTDIV_OFFSET);
-		target_fbdiv = clock_control_tt_bh_calculate_fbdiv(config->refclk_rate,
-								   (uint32_t)rate, pll_cntl_1,
-								   pll_cntl_5, use_postdiv,
-								   postdiv_index);
-
-		if (is_l2cpu) {
-			if (target_fbdiv == 0) {
-				k_spin_unlock(&data->lock, key);
-				return -EINVAL;
-			}
-
-			uint32_t target_vco =
-				(config->refclk_rate * target_fbdiv) / pll_cntl_1.f.refdiv;
-
-			if (!IN_RANGE(target_vco, VCO_MIN_FREQ, VCO_MAX_FREQ)) {
-				k_spin_unlock(&data->lock, key);
-				return -ERANGE;
-			}
-		}
+		uint32_t target_fbdiv =
+			clock_control_tt_bh_calculate_fbdiv(config->refclk_rate, (uint32_t)rate,
+							    pll_cntl_1, pll_cntl_5, use_postdiv, 0);
 
 		while (pll_cntl_1.f.fbdiv != target_fbdiv) {
 			if (target_fbdiv > pll_cntl_1.f.fbdiv) {
@@ -539,6 +612,19 @@ static int clock_control_tt_bh_set_rate(const struct device *dev, clock_control_
 
 			clock_control_tt_bh_write_reg(config, PLL_CNTL_1_OFFSET, pll_cntl_1.val);
 			k_busy_wait_ns(100);
+		}
+	} else if (clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_0 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_1 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_2 ||
+		   clock == CLOCK_CONTROL_TT_BH_CLOCK_L2CPUCLK_3) {
+		/* L2CPUCLK moves between fixed operating points (postdiv + fbdiv), because the
+		 * low park point needs a postdiv change the AICLK fbdiv-only path cannot express.
+		 */
+		int ret = clock_control_tt_bh_set_l2cpu_opp(config, data, (uint32_t)rate);
+
+		if (ret != 0) {
+			k_spin_unlock(&data->lock, key);
+			return ret;
 		}
 	} else if (clock == CLOCK_CONTROL_TT_BH_INIT_STATE) {
 		struct tt_bh_pll_settings settings = config->init_settings;
