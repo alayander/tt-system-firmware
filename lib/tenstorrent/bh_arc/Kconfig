@@ -65,6 +65,15 @@ config TT_BH_ARC_GDDR_CA_LATCH
 	  in the devicetree. Requires MRISC FW with params table v7 or newer
 	  (v8+ for driver strength); older MRISC FW ignores the extra fields.
 
+config TT_BH_ARC_EFUSE_BURN
+	bool "Enable the host eFuse burn message (TT_SMC_MSG_EFUSE_BURN_BITS)"
+	default n
+	help
+	  Register the host message handler that programs (burns) eFuse bits via
+	  the tt_efuse driver, applying the eFuse program voltage (VQPS) over I2C.
+	  eFuse programming is irreversible, so this is intended to be enabled only
+	  on specific board revisions via Kconfig.defconfig.
+
 config TT_BH_ARC_I2C_TIMEOUT
 	bool "Time out if I2C transaction exceeds given duration"
 	default y

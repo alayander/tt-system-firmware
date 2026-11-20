@@ -31,6 +31,9 @@ endchoice
 config TT_BH_ARC_GDDR_CA_LATCH
 	default n if BOARD_REVISION = "orion_slt"
 
+config TT_BH_ARC_EFUSE_BURN
+	default y if BOARD_REVISION = "orion_slt"
+
 endif
 
 # RTT is the primary log backend for devices connected via JTAG or SWD without UARTs

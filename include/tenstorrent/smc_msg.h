@@ -64,6 +64,11 @@ enum tt_smc_msg {
 	/** @brief @ref i2c_message_rqst "I2C message request" */
 	TT_SMC_MSG_I2C_MESSAGE = 0x1E,
 
+	/** @brief Burn eFuse bits request. Registered only on board revisions that enable
+	 * @ref CONFIG_TT_BH_ARC_EFUSE_BURN. eFuse programming is irreversible.
+	 */
+	TT_SMC_MSG_EFUSE_BURN_BITS = 0x1F,
+
 	/** @brief @ref reinit_tensix_rqst "Reinitialize Tensix request" */
 	TT_SMC_MSG_REINIT_TENSIX = 0x20,
 
