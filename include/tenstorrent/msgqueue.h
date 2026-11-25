@@ -103,6 +103,16 @@ enum dvfs_counter_index {
 	 * delaying its own next cycle. Also a maximum since the last clear.
 	 */
 	DVFS_COUNTER_MAX_PASS_US,
+	/** @brief Period histogram: passes with start-to-start spacing < 1100 us (on schedule). */
+	DVFS_COUNTER_PERIOD_HIST_LT1100,
+	/** @brief Period histogram: passes with spacing in [1100, 1300) us (slightly late). */
+	DVFS_COUNTER_PERIOD_HIST_1100_1300,
+	/** @brief Period histogram: passes with spacing in [1300, 1500) us (late). */
+	DVFS_COUNTER_PERIOD_HIST_1300_1500,
+	/** @brief Period histogram: passes with spacing in [1500, 2000) us (very late). */
+	DVFS_COUNTER_PERIOD_HIST_1500_2000,
+	/** @brief Period histogram: passes with spacing >= 2000 us (a tick was dropped). */
+	DVFS_COUNTER_PERIOD_HIST_GE2000,
 	/** @brief Number of counters in this bank */
 	DVFS_COUNTER_COUNT,
 };

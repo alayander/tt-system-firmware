@@ -38,6 +38,29 @@ static atomic_t dvfs_dropped_ticks;
 static atomic_t dvfs_max_period_us;
 static atomic_t dvfs_max_pass_us;
 
+/* Distribution of DVFS pass spacing since the last clear: one counter per period bucket. This is
+ * a few in-RAM atomics updated per pass, so it reveals the whole interval/period relationship at
+ * negligible cost and is read back out-of-band over the counter message, without perturbing the
+ * timing being measured.
+ */
+#define DVFS_PERIOD_HIST_BUCKETS 5
+static atomic_t dvfs_period_hist[DVFS_PERIOD_HIST_BUCKETS];
+/* Upper-exclusive bucket edges in us; the final bucket catches everything >= the last edge. */
+static const uint32_t dvfs_period_hist_edges[DVFS_PERIOD_HIST_BUCKETS - 1] = {
+	1100, 1300, 1500, 2000,
+};
+
+static void dvfs_period_hist_add(uint32_t period_us)
+{
+	for (int i = 0; i < DVFS_PERIOD_HIST_BUCKETS - 1; i++) {
+		if (period_us < dvfs_period_hist_edges[i]) {
+			atomic_inc(&dvfs_period_hist[i]);
+			return;
+		}
+	}
+	atomic_inc(&dvfs_period_hist[DVFS_PERIOD_HIST_BUCKETS - 1]);
+}
+
 /* Raise *target to value if value is larger. Retries on contention with a concurrent clear. */
 static void atomic_max_u32(atomic_t *target, uint32_t value)
 {
@@ -73,13 +96,15 @@ static void dvfs_work_handler(struct k_work *work)
 	static uint32_t prev_start_cyc;
 	static bool have_prev;
 	uint32_t start_cyc = k_cycle_get_32();
+	uint32_t period_us = 0;
 
 	/* Unsigned subtraction stays correct across the 32-bit cycle counter wrap, since one
 	 * period or pass is tiny relative to the counter's range.
 	 */
 	if (have_prev) {
-		atomic_max_u32(&dvfs_max_period_us,
-			       k_cyc_to_us_floor32(start_cyc - prev_start_cyc));
+		period_us = k_cyc_to_us_floor32(start_cyc - prev_start_cyc);
+		atomic_max_u32(&dvfs_max_period_us, period_us);
+		dvfs_period_hist_add(period_us);
 	}
 	prev_start_cyc = start_cyc;
 	have_prev = true;
@@ -184,6 +209,11 @@ static atomic_t *const dvfs_counters[DVFS_COUNTER_COUNT] = {
 	[DVFS_COUNTER_DROPPED_TICKS] = &dvfs_dropped_ticks,
 	[DVFS_COUNTER_MAX_PERIOD_US] = &dvfs_max_period_us,
 	[DVFS_COUNTER_MAX_PASS_US] = &dvfs_max_pass_us,
+	[DVFS_COUNTER_PERIOD_HIST_LT1100] = &dvfs_period_hist[0],
+	[DVFS_COUNTER_PERIOD_HIST_1100_1300] = &dvfs_period_hist[1],
+	[DVFS_COUNTER_PERIOD_HIST_1300_1500] = &dvfs_period_hist[2],
+	[DVFS_COUNTER_PERIOD_HIST_1500_2000] = &dvfs_period_hist[3],
+	[DVFS_COUNTER_PERIOD_HIST_GE2000] = &dvfs_period_hist[4],
 };
 
 uint8_t dvfs_counter_handler(const union request *request, struct response *response)
